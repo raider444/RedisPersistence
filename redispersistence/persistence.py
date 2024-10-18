@@ -1,12 +1,16 @@
 import pickle
+import inspect
+import logging
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any, DefaultDict, Dict, Optional, Tuple, Union, cast
 from redis import Redis
+from redis.exceptions import ConnectionError
 
 from telegram.ext import BasePersistence, PersistenceInput, ContextTypes
 from telegram.ext._utils.types import ConversationDict, UD, CD, CDCData, BD
 
+logger = logging.getLogger(__name__)
 
 class RedisPersistence(BasePersistence):
     """Using Redis to make the bot persistent"""
@@ -33,10 +37,18 @@ class RedisPersistence(BasePersistence):
 
     async def load_redis(self) -> None:
         try:
-            _awaitable = self.redis.get('TelegramBotPersistence')
-            data_bytes = None
-            if _awaitable is not None:
-                data_bytes = await _awaitable
+            get_tg_bot_presistence = self.redis.get('TelegramBotPersistence')
+        except ConnectionError as err:
+            logger.error(
+                f"Redis is unavailable, bot persistence is disabled. "
+                f"ConnectionError: {err}"
+            )
+            raise TypeError(f"Failed to connect to Redis") from err
+        try:
+            if inspect.iscoroutinefunction(get_tg_bot_presistence):
+                data_bytes = await get_tg_bot_presistence
+            else:
+                data_bytes = get_tg_bot_presistence
             if data_bytes:
                 data = pickle.loads(data_bytes)
                 self.user_data = defaultdict(dict, data['user_data'])
@@ -63,7 +75,13 @@ class RedisPersistence(BasePersistence):
             'bot_data': self.bot_data,
         }
         data_bytes = pickle.dumps(data)
-        self.redis.set('TelegramBotPersistence', data_bytes)
+        try:
+            self.redis.set('TelegramBotPersistence', data_bytes)
+        except ConnectionError as err:
+            logger.error(
+                f"Redis is unavailable, bot persistence is disabled. "
+                f"ConnectionError: {err}"
+            )
 
     async def get_user_data(self) -> DefaultDict[int, Dict[Any, Any]]:
         """Returns the user_data from the pickle on Redis if it exists or an empty :obj:`defaultdict`."""
